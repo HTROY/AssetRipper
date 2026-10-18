@@ -1,4 +1,4 @@
-﻿using System.Collections;
+using System.Collections;
 
 namespace AssetRipper.Assets.Generics;
 
@@ -100,6 +100,22 @@ public readonly struct ReadOnlyArraySegment<T> : IReadOnlyList<T>
 		T[] array = new T[Count];
 		Array.Copy(_array, _offset, array, 0, Count);
 		return array;
+	}
+
+	/// <summary>
+	/// Gets the backing array without copying when this segment covers the entire array.
+	/// </summary>
+	/// <param name="array">The backing array.</param>
+	/// <returns><see langword="true"/> if the backing array was returned; otherwise, <see langword="false"/>.</returns>
+	public bool TryGetFullArray([NotNullWhen(true)] out T[]? array)
+	{
+		if (_array is not null && _offset == 0 && Count == _array.Length)
+		{
+			array = _array;
+			return true;
+		}
+		array = null;
+		return false;
 	}
 
 	public static bool operator ==(ReadOnlyArraySegment<T> a, ReadOnlyArraySegment<T> b) => a.Equals(b);

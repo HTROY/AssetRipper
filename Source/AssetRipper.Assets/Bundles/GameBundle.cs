@@ -1,4 +1,4 @@
-﻿using AssetRipper.Assets.Collections;
+using AssetRipper.Assets.Collections;
 using AssetRipper.IO.Files.ResourceFiles;
 
 namespace AssetRipper.Assets.Bundles;
@@ -12,6 +12,14 @@ public sealed partial class GameBundle : Bundle
 	/// The <see cref="IResourceProvider"/> being used for this bundle.
 	/// </summary>
 	public IResourceProvider? ResourceProvider { get; set; }
+
+	/// <summary>
+	/// When greater than zero, the game loader forces a full, compacting garbage collection
+	/// each time the managed heap has grown by this many bytes since the previous collection.
+	/// This substantially reduces the peak memory usage when loading large games, at the cost
+	/// of additional CPU time. Zero disables these collections (the default).
+	/// </summary>
+	public static long MemoryPressureCollectionThreshold { get; set; }
 
 	/// <summary>
 	/// The name of this bundle which is 'GameBundle'.

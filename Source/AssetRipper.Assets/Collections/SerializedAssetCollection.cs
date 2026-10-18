@@ -1,4 +1,4 @@
-﻿using AssetRipper.Assets.Bundles;
+using AssetRipper.Assets.Bundles;
 using AssetRipper.Assets.IO;
 using AssetRipper.Assets.Metadata;
 using AssetRipper.IO.Files.SerializedFiles;
@@ -74,8 +74,9 @@ public sealed class SerializedAssetCollection : AssetCollection
 	private static void ReadData(SerializedAssetCollection collection, SerializedFile file, AssetFactoryBase factory)
 	{
 		SerializedTypeReference[] referenceTypes = file.RefTypes.ToArray();
-		foreach (ObjectInfo objectInfo in file.Objects)
+		for (int i = 0; i < file.Objects.Length; i++)
 		{
+			ObjectInfo objectInfo = file.Objects[i];
 			int classID = objectInfo.TypeID < 0 ? 114 : objectInfo.TypeID;
 			AssetInfo assetInfo = new AssetInfo(collection, objectInfo.FileID, classID);
 			IUnityObjectBase? asset = factory.ReadAsset(assetInfo, objectInfo.ObjectData, objectInfo.Type, referenceTypes);
@@ -83,6 +84,9 @@ public sealed class SerializedAssetCollection : AssetCollection
 			{
 				collection.AddAsset(asset);
 			}
+			// The raw serialized data is no longer needed once the asset has been read.
+			// Releasing it here keeps the peak memory usage of large loads considerably lower.
+			file.ReleaseObjectData(i);
 		}
 	}
 }

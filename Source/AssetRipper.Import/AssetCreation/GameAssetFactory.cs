@@ -1,4 +1,4 @@
-﻿using AssetRipper.Assets;
+using AssetRipper.Assets;
 using AssetRipper.Assets.Generics;
 using AssetRipper.Assets.IO;
 using AssetRipper.Assets.Metadata;
@@ -54,7 +54,7 @@ public sealed class GameAssetFactory : AssetFactoryBase
 			//Assets with a stripped version can't be read.
 			//Similarly, Unity versions before 3.5 are not supported.
 			//Most asset types changed in 3.5, so this has minimal impact.
-			return new UnreadableObject(assetInfo, assetData.ToArray());
+			return new UnreadableObject(assetInfo, GetRawData(assetData));
 		}
 		else if (assetInfo.ClassID == (int)ClassIDType.MonoBehaviour)
 		{
@@ -99,7 +99,7 @@ public sealed class GameAssetFactory : AssetFactoryBase
 
 	private static IUnityObjectBase ReadNormalObject(AssetInfo assetInfo, ReadOnlyArraySegment<byte> assetData)
 	{
-		IUnityObjectBase asset = TryReadNormalObject(assetInfo, assetData, assetInfo.Collection.Version, out string? error);
+		IUnityObjectBase asset = TryReadNormalObject(assetInfo, assetData, assetInfo.Collection.Version, out string? error, out Exception? exception);
 		if (error is null)
 		{
 			return asset;
@@ -116,11 +116,11 @@ public sealed class GameAssetFactory : AssetFactoryBase
 			}
 			return asset;
 		}
-		else if (assetInfo.Collection.Version.Type == UnityVersionType.Patch)
+		else if (assetInfo.Collection.Version.Type == UnityVersionType.Patch && exception is not OutOfMemoryException)
 		{
 			UnityVersion oldVersion = assetInfo.Collection.Version;
 			UnityVersion newVersion = new UnityVersion(oldVersion.Major, oldVersion.Minor, unchecked((ushort)(oldVersion.Build + 1u)));
-			IUnityObjectBase newAsset = TryReadNormalObject(assetInfo, assetData, newVersion, out string? newError);
+			IUnityObjectBase newAsset = TryReadNormalObject(assetInfo, assetData, newVersion, out string? newError, out _);
 			if (newError is null)
 			{
 				return newAsset;
@@ -128,17 +128,25 @@ public sealed class GameAssetFactory : AssetFactoryBase
 		}
 
 		Logger.Error(LogCategory.Import, error);
-		UnreadableObject unreadable = new UnreadableObject(asset.AssetInfo, assetData.ToArray());
+		UnreadableObject unreadable = new UnreadableObject(asset.AssetInfo, GetRawData(assetData));
 		unreadable.Name = (asset as INamed)?.Name;
 		return unreadable;
 	}
 
-	private static IUnityObjectBase TryReadNormalObject(AssetInfo assetInfo, ReadOnlySpan<byte> assetData, UnityVersion version, out string? error)
+	private static byte[] GetRawData(ReadOnlyArraySegment<byte> assetData)
+	{
+		// Avoid copying the asset data; it is often very large (for example, giant texture arrays),
+		// and the copy itself can throw an OutOfMemoryException when the game is huge.
+		return assetData.TryGetFullArray(out byte[]? array) ? array : assetData.ToArray();
+	}
+
+	private static IUnityObjectBase TryReadNormalObject(AssetInfo assetInfo, ReadOnlySpan<byte> assetData, UnityVersion version, out string? error, out Exception? exception)
 	{
 		IUnityObjectBase? asset = CreateAsset(assetInfo, version);
 		if (asset is null)
 		{
 			error = null;
+			exception = null;
 			return new UnknownObject(assetInfo, assetData.ToArray());
 		}
 		EndianSpanReader reader = new EndianSpanReader(assetData, asset.Collection.EndianType);
@@ -167,10 +175,12 @@ public sealed class GameAssetFactory : AssetFactoryBase
 			{
 				error = null;
 			}
+			exception = null;
 		}
 		catch (Exception ex)
 		{
 			error = MakeError_ReadException(asset, ex);
+			exception = ex;
 		}
 		return asset;
 

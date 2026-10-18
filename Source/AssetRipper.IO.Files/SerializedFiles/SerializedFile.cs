@@ -207,6 +207,17 @@ public sealed class SerializedFile : FileBase
 		return SerializedFileScheme.Default.Read(stream, filePath, fileName);
 	}
 
+	/// <summary>
+	/// Releases the raw serialized data of the object with the specified index.
+	/// This is used after an object has been read into an asset, so that the
+	/// original bytes can be garbage collected as soon as possible.
+	/// </summary>
+	/// <param name="index">The index of the object in the object table.</param>
+	public void ReleaseObjectData(int index)
+	{
+		m_objects![index].ObjectData = null!;
+	}
+
 	public static SerializedFile FromBuilder(SerializedFileBuilder builder)
 	{
 		return new()

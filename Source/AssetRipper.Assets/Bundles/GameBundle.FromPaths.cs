@@ -1,10 +1,11 @@
-﻿using AssetRipper.Assets.Collections;
+using AssetRipper.Assets.Collections;
 using AssetRipper.Assets.IO;
 using AssetRipper.IO.Files;
 using AssetRipper.IO.Files.CompressedFiles;
 using AssetRipper.IO.Files.ResourceFiles;
 using AssetRipper.IO.Files.SerializedFiles;
 using AssetRipper.IO.Files.SerializedFiles.Parser;
+using System.Runtime;
 
 namespace AssetRipper.Assets.Bundles;
 
@@ -35,6 +36,8 @@ partial class GameBundle
 		List<FileBase> fileStack = LoadFilesAndDependencies(paths, fileSystem, initializer?.DependencyProvider);
 		UnityVersion defaultVersion = initializer is null ? default : initializer.DefaultVersion;
 
+		long collectionThreshold = MemoryPressureCollectionThreshold;
+		long collectionBaseline = collectionThreshold > 0 ? GC.GetTotalMemory(forceFullCollection: true) : 0;
 		while (fileStack.Count > 0)
 		{
 			switch (RemoveLastItem(fileStack))
@@ -52,6 +55,13 @@ partial class GameBundle
 				case FailedFile failedFile:
 					AddFailed(failedFile);
 					break;
+			}
+
+			if (collectionThreshold > 0 && GC.GetTotalMemory(forceFullCollection: false) - collectionBaseline > collectionThreshold)
+			{
+				GCSettings.LargeObjectHeapCompactionMode = GCLargeObjectHeapCompactionMode.CompactOnce;
+				GC.Collect(2, GCCollectionMode.Forced, blocking: true, compacting: true);
+				collectionBaseline = GC.GetTotalMemory(forceFullCollection: true);
 			}
 		}
 	}
