@@ -13,6 +13,26 @@ public sealed class SerializedAssetCollection : AssetCollection
 {
 	private FileIdentifier[]? DependencyIdentifiers { get; set; }
 
+	/// <summary>
+	/// The raw dependency identifiers of the serialized file this collection was created from.
+	/// This is only captured in metadata-only (discovery) mode, and it is <see langword="null"/>
+	/// otherwise.
+	/// </summary>
+	public IReadOnlyList<FileIdentifier>? DiscoveryDependencyIdentifiers { get; private set; }
+
+	/// <summary>
+	/// The dependency collection names by serialized file external index. Index zero is the
+	/// collection itself; a <see langword="null"/> entry is an unresolved or non-collection
+	/// dependency. This is <see langword="null"/> until the dependency list has been initialized.
+	/// </summary>
+	public IReadOnlyList<string?>? DependencyNames { get; private set; }
+
+	/// <summary>
+	/// The class IDs of all objects in this collection. This is only captured in metadata-only
+	/// (discovery) mode, and it is <see langword="null"/> otherwise.
+	/// </summary>
+	public IReadOnlyCollection<int>? DiscoveryClassIDs { get; private set; }
+
 	private SerializedAssetCollection(Bundle bundle) : base(bundle)
 	{
 	}
@@ -25,6 +45,18 @@ public sealed class SerializedAssetCollection : AssetCollection
 		}
 		if (DependencyIdentifiers is not null)
 		{
+			string?[] dependencyNames = new string?[DependencyIdentifiers.Length + 1];
+			dependencyNames[0] = Name;
+			for (int i = 0; i < DependencyIdentifiers.Length; i++)
+			{
+				dependencyNames[i + 1] = DependencyIdentifiers[i].GetFilePath();
+			}
+			DependencyNames = dependencyNames;
+
+			if (SelectiveLoadingMode.MetadataOnly)
+			{
+				DiscoveryDependencyIdentifiers = DependencyIdentifiers;
+			}
 			for (int i = 0; i < DependencyIdentifiers.Length; i++)
 			{
 				FileIdentifier identifier = DependencyIdentifiers[i];
@@ -36,6 +68,10 @@ public sealed class SerializedAssetCollection : AssetCollection
 				SetDependency(i + 1, dependency);
 			}
 			DependencyIdentifiers = null;
+		}
+		else if (DependencyNames is null)
+		{
+			DependencyNames = [Name];
 		}
 	}
 
@@ -62,6 +98,11 @@ public sealed class SerializedAssetCollection : AssetCollection
 			Flags = file.Flags,
 			EndianType = file.EndianType,
 		};
+		if (SelectiveLoadingMode.MetadataOnly)
+		{
+			// Discovery needs the game file that contains each collection.
+			collection.FilePath = file.FilePath;
+		}
 		ReadOnlySpan<FileIdentifier> fileDependencies = file.Dependencies;
 		if (fileDependencies.Length > 0)
 		{
@@ -74,10 +115,22 @@ public sealed class SerializedAssetCollection : AssetCollection
 	private static void ReadData(SerializedAssetCollection collection, SerializedFile file, AssetFactoryBase factory)
 	{
 		SerializedTypeReference[] referenceTypes = file.RefTypes.ToArray();
+		bool metadataOnly = SelectiveLoadingMode.MetadataOnly;
 		for (int i = 0; i < file.Objects.Length; i++)
 		{
 			ObjectInfo objectInfo = file.Objects[i];
 			int classID = objectInfo.TypeID < 0 ? 114 : objectInfo.TypeID;
+			if (metadataOnly)
+			{
+				collection.DiscoveryClassIDs ??= new HashSet<int>();
+				((HashSet<int>)collection.DiscoveryClassIDs).Add(classID);
+				if (!SelectiveLoadingMode.MaterializedClassIDs.Contains(objectInfo.TypeID))
+				{
+					// In metadata-only mode only a few classes are materialized; the rest are
+					// enumerated from the object tables without creating assets.
+					continue;
+				}
+			}
 			AssetInfo assetInfo = new AssetInfo(collection, objectInfo.FileID, classID);
 			IUnityObjectBase? asset = factory.ReadAsset(assetInfo, objectInfo.ObjectData, objectInfo.Type, referenceTypes);
 			if (asset is not null)

@@ -22,6 +22,15 @@ public sealed partial class GameBundle : Bundle
 	public static long MemoryPressureCollectionThreshold { get; set; }
 
 	/// <summary>
+	/// When true, every game file is fully processed (its assets are read) directly after it has
+	/// been loaded, instead of keeping the raw data of all files in memory until every file has
+	/// been read. This substantially lowers the peak memory usage when only a few large files
+	/// are loaded, which is the case for selective loading. The default is <see langword="false"/>,
+	/// which keeps the normal importer behaviour.
+	/// </summary>
+	public static bool IncrementalProcessing { get; set; }
+
+	/// <summary>
 	/// The name of this bundle which is 'GameBundle'.
 	/// </summary>
 	public override string Name => nameof(GameBundle);

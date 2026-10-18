@@ -65,11 +65,16 @@ public struct ObjectInfo
 		// Size of the object data.
 		int byteSize = reader.ReadInt32();
 
+		// The absolute location of the object data. It is tracked even when the data is not
+		// read, so that callers can load individual objects later (metadata-only loading).
+		ObjectDataOffset = dataOffset + byteStart;
+		ObjectDataSize = byteSize;
+
 		// Read object data
+		if (!SelectiveLoadingMode.MetadataOnly)
 		{
 			long currentPosition = reader.BaseStream.Position;
-			long dataPosition = dataOffset + byteStart;
-			reader.BaseStream.Position = dataPosition;
+			reader.BaseStream.Position = ObjectDataOffset;
 			ObjectData = reader.ReadBytes(byteSize);
 			reader.BaseStream.Position = currentPosition;
 		}
@@ -235,6 +240,14 @@ public struct ObjectInfo
 	public short ScriptTypeIndex { get; set; }
 	public bool Stripped { get; set; }
 	public SerializedType? Type { get; set; }
+	/// <summary>
+	/// The absolute offset of <see cref="ObjectData"/> within the serialized file.
+	/// </summary>
+	public long ObjectDataOffset { get; set; }
+	/// <summary>
+	/// The size of <see cref="ObjectData"/> in bytes.
+	/// </summary>
+	public int ObjectDataSize { get; set; }
 	/// <summary>
 	/// The data for the object.
 	/// </summary>

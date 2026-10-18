@@ -2,6 +2,8 @@ using AssetRipper.IO.Endian;
 using AssetRipper.IO.Files.Exceptions;
 using AssetRipper.IO.Files.Extensions;
 using AssetRipper.IO.Files.ResourceFiles;
+using AssetRipper.IO.Files.SerializedFiles;
+using AssetRipper.IO.Files.SerializedFiles.Parser;
 using AssetRipper.IO.Files.Streams.Smart;
 using K4os.Compression.LZ4;
 
@@ -150,6 +152,11 @@ public sealed class FileStreamBundleFile : FileContainer
 		}
 
 		using BundleFileBlockReader blockReader = new BundleFileBlockReader(stream, BlocksInfo);
+		if (SelectiveLoadingMode.MetadataOnly && DirectoryInfo.Nodes.Any(static node => node.Flags.HasFlag(NodeFlags.SerializedFile)))
+		{
+			ReadSerializedFilesMetadataOnly(blockReader);
+			return;
+		}
 		foreach (FileStreamNode entry in DirectoryInfo.Nodes)
 		{
 			try
@@ -167,6 +174,80 @@ public sealed class FileStreamBundleFile : FileContainer
 				});
 			}
 		}
+	}
+
+	/// <summary>
+	/// Reads only the metadata of the serialized files in this bundle. Resource entries are
+	/// skipped, and only the header, the metadata and the object data of the classes listed in
+	/// <see cref="SelectiveLoadingMode.MaterializedClassIDs"/> are read. This is much cheaper
+	/// than <see cref="BundleFileBlockReader.ReadEntry"/>'s eager decompression of the whole
+	/// entry and is used by the selective-loading discovery pass.
+	/// </summary>
+	private void ReadSerializedFilesMetadataOnly(BundleFileBlockReader blockReader)
+	{
+		foreach (FileStreamNode entry in DirectoryInfo.Nodes)
+		{
+			if (!entry.Flags.HasFlag(NodeFlags.SerializedFile))
+			{
+				continue;
+			}
+
+			try
+			{
+				AddSerializedFile(ReadSerializedFileMetadataOnly(blockReader, entry));
+			}
+			catch (Exception ex)
+			{
+				AddFailedFile(new FailedFile()
+				{
+					Name = entry.Path,
+					FilePath = FilePath,
+					StackTrace = ex.ToString(),
+				});
+			}
+		}
+	}
+
+	private SerializedFile ReadSerializedFileMetadataOnly(BundleFileBlockReader blockReader, FileStreamNode entry)
+	{
+		byte[] headerBytes = blockReader.ReadEntryRange(entry, 0, (int)Math.Min(entry.Size, 256L));
+		SerializedFileHeader header = new();
+		header.Read(new MemoryStream(headerBytes, writable: false));
+
+		long metadataLength;
+		if (SerializedFileMetadata.IsMetadataAtTheEnd(header.Version) || header.DataOffset <= 0 || header.DataOffset > entry.Size)
+		{
+			// Old or unexpected layout: fall back to reading the whole entry.
+			using SmartStream entryStream = blockReader.ReadEntry(entry);
+			SerializedFile fullFile = new()
+			{
+				FilePath = FilePath,
+				Name = entry.Path,
+			};
+			fullFile.ReadInternal(entryStream, materializeObjectData: true);
+			return fullFile;
+		}
+
+		metadataLength = header.DataOffset;
+		byte[] metadataBytes = blockReader.ReadEntryRange(entry, 0, checked((int)metadataLength));
+		using SmartStream metadataStream = SmartStream.CreateMemory(metadataBytes, 0, metadataBytes.Length, writable: false);
+		SerializedFile serializedFile = new()
+		{
+			FilePath = FilePath,
+			Name = entry.Path,
+		};
+		serializedFile.ReadInternal(metadataStream, materializeObjectData: false);
+
+		for (int i = 0; i < serializedFile.Objects.Length; i++)
+		{
+			ObjectInfo objectInfo = serializedFile.Objects[i];
+			if (SelectiveLoadingMode.ShouldMaterialize(objectInfo.TypeID) && objectInfo.ObjectDataSize > 0)
+			{
+				byte[] objectData = blockReader.ReadEntryRange(entry, objectInfo.ObjectDataOffset, objectInfo.ObjectDataSize);
+				serializedFile.SetObjectData(i, objectData);
+			}
+		}
+		return serializedFile;
 	}
 
 	private void WriteFileStreamMetadata(Stream stream, long basePosition)

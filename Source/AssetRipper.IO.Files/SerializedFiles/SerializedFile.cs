@@ -90,6 +90,22 @@ public sealed class SerializedFile : FileBase
 
 	public override void Read(SmartStream stream)
 	{
+		ReadInternal(stream, materializeObjectData: true);
+	}
+
+	/// <summary>
+	/// Reads the header and metadata of this serialized file.
+	/// </summary>
+	/// <param name="stream">
+	/// The stream to read from. In metadata-only loading this may contain only the header and
+	/// metadata; in that case <paramref name="materializeObjectData"/> must be false.
+	/// </param>
+	/// <param name="materializeObjectData">
+	/// Whether the data of the classes listed in <see cref="SelectiveLoadingMode.MaterializedClassIDs"/>
+	/// should be read from <paramref name="stream"/>.
+	/// </param>
+	internal void ReadInternal(SmartStream stream, bool materializeObjectData)
+	{
 		SerializedFileHeader header = new();
 		header.Read(stream);
 		if (SerializedFileMetadata.IsMetadataAtTheEnd(header.Version))
@@ -100,6 +116,56 @@ public sealed class SerializedFile : FileBase
 		metadata.Read(stream, header);
 
 		SetProperties(header, metadata);
+
+		if (materializeObjectData && SelectiveLoadingMode.MetadataOnly)
+		{
+			MaterializeObjectData(stream);
+		}
+	}
+
+	/// <summary>
+	/// Reads the data of the objects whose class is listed in
+	/// <see cref="SelectiveLoadingMode.MaterializedClassIDs"/>. Object data is normally read by
+	/// <see cref="ObjectInfo.Read"/>, but metadata-only loading defers it to this method.
+	/// </summary>
+	private void MaterializeObjectData(SmartStream stream)
+	{
+		if (m_objects is null || SelectiveLoadingMode.MaterializedClassIDs.Count == 0)
+		{
+			return;
+		}
+
+		long currentPosition = stream.Position;
+		try
+		{
+			for (int i = 0; i < m_objects.Length; i++)
+			{
+				ObjectInfo objectInfo = m_objects[i];
+				if (!SelectiveLoadingMode.ShouldMaterialize(objectInfo.TypeID) || objectInfo.ObjectDataSize == 0)
+				{
+					continue;
+				}
+				byte[] data = new byte[objectInfo.ObjectDataSize];
+				stream.Position = objectInfo.ObjectDataOffset;
+				stream.ReadExactly(data);
+				m_objects[i].ObjectData = data;
+			}
+		}
+		finally
+		{
+			stream.Position = currentPosition;
+		}
+	}
+
+	/// <summary>
+	/// Sets the raw data of the object with the specified index. Used by metadata-only loading,
+	/// where the data is read from a separate (partial) stream.
+	/// </summary>
+	/// <param name="index">The index of the object in the object table.</param>
+	/// <param name="data">The raw object data.</param>
+	internal void SetObjectData(int index, byte[] data)
+	{
+		m_objects![index].ObjectData = data;
 	}
 
 	private void SetProperties(SerializedFileHeader header, SerializedFileMetadata metadata)

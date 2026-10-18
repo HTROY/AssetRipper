@@ -1,4 +1,4 @@
-﻿using AssetRipper.IO.Files.Exceptions;
+using AssetRipper.IO.Files.Exceptions;
 using AssetRipper.IO.Files.Streams;
 using AssetRipper.IO.Files.Streams.Smart;
 using K4os.Compression.LZ4;
@@ -156,6 +156,121 @@ internal sealed class BundleFileBlockReader : IDisposable
 		}
 		entryStream.Position = 0;
 		return entryStream.CreateReference();
+	}
+
+	/// <summary>
+	/// Reads a byte range of an entry without materializing the whole entry.
+	/// </summary>
+	/// <remarks>
+	/// This is used by metadata-only loading, which only needs the header, the metadata and a
+	/// few small objects. Unlike <see cref="ReadEntry"/>, this method decompresses only the
+	/// storage blocks that overlap the requested range.
+	/// </remarks>
+	/// <param name="entry">The entry to read from.</param>
+	/// <param name="offset">The offset of the range relative to the start of the entry.</param>
+	/// <param name="size">The number of bytes to read.</param>
+	/// <returns>The requested bytes.</returns>
+	public byte[] ReadEntryRange(FileStreamNode entry, long offset, int size)
+	{
+		ObjectDisposedException.ThrowIf(m_isDisposed, typeof(BundleFileBlockReader));
+		ArgumentOutOfRangeException.ThrowIfNegative(offset);
+		ArgumentOutOfRangeException.ThrowIfNegative(size);
+		if (offset + size > entry.Size)
+		{
+			throw new InvalidFormatException("Entry range extends beyond the end of the entry.");
+		}
+		if (size == 0)
+		{
+			return [];
+		}
+
+		byte[] result = new byte[size];
+		int blockIndex = 0;
+		long blockCompressedOffset = 0;
+		long blockDecompressedOffset = 0;
+		while (blockDecompressedOffset + m_blocksInfo.StorageBlocks[blockIndex].UncompressedSize <= offset)
+		{
+			blockCompressedOffset += m_blocksInfo.StorageBlocks[blockIndex].CompressedSize;
+			blockDecompressedOffset += m_blocksInfo.StorageBlocks[blockIndex].UncompressedSize;
+			blockIndex++;
+		}
+
+		int written = 0;
+		long position = offset;
+		while (written < size)
+		{
+			StorageBlock block = m_blocksInfo.StorageBlocks[blockIndex];
+			long offsetInsideBlock = position - blockDecompressedOffset;
+			int take = (int)Math.Min(block.UncompressedSize - offsetInsideBlock, (long)(size - written));
+			ReadBlockRange(entry, block, blockCompressedOffset, offsetInsideBlock, result.AsSpan(written, take));
+			written += take;
+			position += take;
+			blockCompressedOffset += block.CompressedSize;
+			blockDecompressedOffset += block.UncompressedSize;
+			blockIndex++;
+		}
+		return result;
+	}
+
+	/// <summary>
+	/// Decompresses a single storage block (if necessary) and copies part of it to
+	/// <paramref name="destination"/>.
+	/// </summary>
+	private void ReadBlockRange(FileStreamNode entry, StorageBlock block, long blockCompressedOffset, long offsetInsideBlock, Span<byte> destination)
+	{
+		CompressionType compressionType = block.CompressionType;
+		if (compressionType is CompressionType.None)
+		{
+			m_stream.Position = m_dataOffset + blockCompressedOffset + offsetInsideBlock;
+			m_stream.ReadExactly(destination);
+			return;
+		}
+
+		byte[] uncompressedBytes = new byte[(int)block.UncompressedSize];
+		m_stream.Position = m_dataOffset + blockCompressedOffset;
+		switch (compressionType)
+		{
+			case CompressionType.Lzma:
+				{
+					using MemoryStream uncompressedStream = new(uncompressedBytes);
+					LzmaCompression.DecompressLzmaStream(m_stream, block.CompressedSize, uncompressedStream, block.UncompressedSize);
+				}
+				break;
+
+			case CompressionType.Lz4:
+			case CompressionType.Lz4HC:
+				{
+					byte[] compressedBytes = new byte[(int)block.CompressedSize];
+					m_stream.ReadExactly(compressedBytes);
+					int bytesWritten = LZ4Codec.Decode(compressedBytes, uncompressedBytes);
+					if (bytesWritten < 0)
+					{
+						DecompressionFailedException.ThrowNoBytesWritten(entry.PathFixed, compressionType);
+					}
+					else if (bytesWritten != (int)block.UncompressedSize)
+					{
+						DecompressionFailedException.ThrowIncorrectNumberBytesWritten(entry.PathFixed, compressionType, block.UncompressedSize, bytesWritten);
+					}
+				}
+				break;
+
+			case CompressionType.Lzham:
+				UnsupportedBundleDecompression.ThrowLzham(entry.PathFixed);
+				break;
+
+			default:
+				if (ZstdCompression.IsZstd(m_stream))
+				{
+					using MemoryStream uncompressedStream = new(uncompressedBytes);
+					ZstdCompression.DecompressStream(m_stream, block.CompressedSize, uncompressedStream, block.UncompressedSize);
+				}
+				else
+				{
+					UnsupportedBundleDecompression.Throw(entry.PathFixed, compressionType);
+				}
+				break;
+		}
+		uncompressedBytes.AsSpan((int)offsetInsideBlock, destination.Length).CopyTo(destination);
 	}
 
 	private void Dispose(bool disposing)

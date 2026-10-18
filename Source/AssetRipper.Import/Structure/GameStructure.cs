@@ -1,4 +1,4 @@
-﻿using AssetRipper.Assets.Bundles;
+using AssetRipper.Assets.Bundles;
 using AssetRipper.Import.AssetCreation;
 using AssetRipper.Import.Configuration;
 using AssetRipper.Import.Logging;
@@ -37,7 +37,7 @@ public sealed class GameStructure : IDisposable
 
 		Logger.SendStatusChange("loading_step_begin_scheme_processing");
 
-		InitializeGameCollection(configuration.ImportSettings.DefaultVersion, configuration.ImportSettings.TargetVersion);
+		InitializeGameCollection(configuration);
 
 		if (!FileCollection.HasAnyAssetCollections())
 		{
@@ -61,7 +61,7 @@ public sealed class GameStructure : IDisposable
 	}
 
 	[MemberNotNull(nameof(FileCollection))]
-	private void InitializeGameCollection(UnityVersion defaultVersion, UnityVersion targetVersion)
+	private void InitializeGameCollection(CoreConfiguration configuration)
 	{
 		Logger.SendStatusChange("loading_step_create_file_collection");
 
@@ -77,11 +77,20 @@ public sealed class GameStructure : IDisposable
 			filePaths = PlatformStructure.Files.Union(MixedStructure.Files).Select(pair => pair.Value);
 		}
 
+		if (configuration.ImportSettings.GameFilePathFilter is { } gameFilePathFilter)
+		{
+			// Selective loading: skip the game files that do not contain the requested assets
+			// or their dependencies. Dependencies of the remaining files are still resolved
+			// through the dependency provider, so this filter is a safety net, not a hard
+			// boundary.
+			filePaths = filePaths.Where(gameFilePathFilter);
+		}
+
 		FileCollection = GameBundle.FromPaths(
 			filePaths,
 			assetFactory,
 			FileSystem,
-			new GameInitializer(PlatformStructure, MixedStructure, FileSystem, defaultVersion, targetVersion));
+			new GameInitializer(PlatformStructure, MixedStructure, FileSystem, configuration.ImportSettings.DefaultVersion, configuration.ImportSettings.TargetVersion));
 	}
 
 	[MemberNotNull(nameof(AssemblyManager))]

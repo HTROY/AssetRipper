@@ -1,4 +1,4 @@
-﻿using AssetRipper.Import.Logging;
+using AssetRipper.Import.Logging;
 using System.Text.Json.Serialization;
 
 namespace AssetRipper.Import.Configuration;
@@ -39,6 +39,19 @@ public sealed record class ImportSettings
 	/// </summary>
 	[JsonConverter(typeof(UnityVersionJsonConverter))]
 	public UnityVersion TargetVersion { get; set; }
+
+	/// <summary>
+	/// An optional filter that is applied to the game file paths before they are loaded.
+	/// Returning <see langword="false"/> skips the file. <see langword="null"/> loads every
+	/// game file, which is the default (non-selective) behaviour.
+	/// </summary>
+	/// <remarks>
+	/// Dependencies of the loaded files can still pull in additional files through the
+	/// dependency provider. This option is intended for selective loading, where a discovery
+	/// pass determines the files that contain the requested asset and its dependency closure.
+	/// </remarks>
+	[JsonIgnore]
+	public Func<string, bool>? GameFilePathFilter { get; set; }
 
 	public void Log()
 	{
